@@ -76,7 +76,7 @@ from .generation import (
     update_instructions,
 )
 from .speech_handle import SpeechHandle
-from .text_processor import contains_interrupt_command
+
 
 
 
@@ -1490,84 +1490,90 @@ class AgentActivity(RecognitionHooks):
         )
 
     def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool:
-        # IMPORTANT: This method is sync to avoid it being cancelled by the AudioRecognition
-        # We explicitly create a new task here
-
+        
         if self._scheduling_paused:
             self._cancel_preemptive_generation()
+
             logger.warning(
                 "skipping user input, speech scheduling is paused",
                 extra={"user_input": info.new_transcript},
             )
 
             if self._session._closing:
-                user_message = llm.ChatMessage(
+                user_msg = llm.ChatMessage(
                     role="user",
                     content=[info.new_transcript],
                     transcript_confidence=info.transcript_confidence,
                 )
-                self._agent._chat_ctx.items.append(user_message)
-                self._session._conversation_item_added(user_message)
-            return True
-        
-        utterance = (
-            self._audio_recognition.last_utterance
-            if self._audio_recognition
-            else ""
-        ) or ""
+                self._agent._chat_ctx.items.append(user_msg)
+                self._session._conversation_item_added(user_msg)
 
-        utterance = utterance.strip().lower()
-
-        # HARD interrupt → allow turn (will interrupt elsewhere)
-        if _contains_interrupt_command(utterance):
-            logger.info(f"Hard interrupt turn accepted: '{utterance}'")
             return True
 
-        # Passive backchannel → DROP TURN COMPLETELY
-        if _is_passive_acknowledgement(utterance):
-            logger.info(f"Dropping passive utterance: '{utterance}'")
+       
+        transcript = (info.new_transcript or "").strip().lower()
+
+        if not transcript:
+            return False
+
+       
+        agent_is_speaking = self._current_speech is not None
+
+       
+        if _contains_interrupt_command(transcript):
+            logger.debug(
+                "hard interrupt detected - allowing turn",
+                extra={"transcript": transcript},
+            )
+            return True
+
+       
+        if agent_is_speaking and _is_passive_acknowledgement(transcript):
+            logger.debug(
+                "ignoring passive backchannel during agent speech",
+                extra={"transcript": transcript},
+            )
             self._cancel_preemptive_generation()
             return False
 
+        
         if (
             self.stt is not None
             and self._turn_detection != "manual"
-            and self._current_speech is not None
+            and agent_is_speaking
             and self._current_speech.allow_interruptions
             and not self._current_speech.interrupted
             and self._session.options.min_interruption_words > 0
-            and len(split_words(info.new_transcript, split_character=True))
-            < self._session.options.min_interruption_words
         ):
-            self._cancel_preemptive_generation()
-            return False
+            words = split_words(transcript, split_character=True)
 
+            if len(words) < self._session.options.min_interruption_words:
+                logger.debug(
+                    "turn ignored: too short to interrupt",
+                    extra={"transcript": transcript},
+                )
+                self._cancel_preemptive_generation()
+                return False
+
+       
         old_task = self._user_turn_completed_atask
         self._user_turn_completed_atask = self._create_speech_task(
             self._user_turn_completed_task(old_task, info),
             name="AgentActivity._user_turn_completed_task",
         )
+
         return True
+
 
     @utils.log_exceptions(logger=logger)
     async def _user_turn_completed_task(
         self, old_task: asyncio.Task[None] | None, info: _EndOfTurnInfo
     ) -> None:
         if old_task is not None:
-            # We never cancel user code as this is very confusing.
-            # So we wait for the old execution of on_user_turn_completed to finish.
-            # In practice this is OK because most speeches will be interrupted if a new turn
-            # is detected. So the previous execution should complete quickly.
+           
             await old_task
 
-        # When the audio recognition detects the end of a user turn:
-        #  - check if realtime model server-side turn detection is enabled
-        #  - check if there is no current generation happening
-        #  - cancel the current generation if it allows interruptions (otherwise skip this current
-        #  turn)
-        #  - generate a reply to the user input
-
-        # interrupt all background speeches and wait for them to finish to update the chat context
+        
         await asyncio.gather(*self._interrupt_background_speeches(force=False))
 
         if isinstance(self.llm, llm.RealtimeModel):

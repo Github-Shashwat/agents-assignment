@@ -1,84 +1,164 @@
-# LiveKit Intelligent Interruption Handling
 
-This repository contains my solution to the **LiveKit Intelligent Interruption Handling Challenge**.
+# LiveKit Context-Aware Interruption Handling
 
-It is based on the assignment repository:
+This repository contains my implementation for the **LiveKit Intelligent Interruption Handling Assignment**.
+
+The work is built on top of the official assignment template provided here:  
 https://github.com/Dark-Sys-Jenkins/agents-assignment
 
-The goal of this assignment is to improve conversational flow in a real-time voice agent by
-correctly distinguishing **passive acknowledgements** from **active interruptions**.
+The primary goal of this project is to improve the natural flow of voice conversations by ensuring the agent can correctly differentiate between:
+
+- simple listener acknowledgements, and  
+- genuine interruption commands.
 
 ---
 
-## 🚩 Problem Statement
+## Problem Description
 
-In the default LiveKit agent behavior, Voice Activity Detection (VAD) is overly sensitive.
-When the agent is speaking and the user says short filler words such as:
+In the default LiveKit voice-agent pipeline, the interruption mechanism is heavily driven by **Voice Activity Detection (VAD)**.
 
+As a result, when the agent is speaking and the user utters short backchannel words such as:
+
+- "okay"
 - "yeah"
-- "ok"
 - "hmm"
 - "uh-huh"
 
-the agent incorrectly interprets these as interruptions and stops speaking mid-sentence.
+the system mistakenly treats them as interruptions and stops the agent mid-response.
 
-This leads to a broken conversational experience.
-
----
-
-## 🎯 Objective
-
-Implement a **context-aware logic layer** such that:
-
-- Passive acknowledgements are **ignored while the agent is speaking**
-- Active interruption commands **immediately stop the agent**
-- The same words (e.g. "yeah") are treated as **valid input when the agent is silent**
-- The solution works in real time and does **not modify the low-level VAD kernel**
+This creates an unnatural and fragmented conversational experience.
 
 ---
 
-## ✅ Final Behavior Matrix
+## Project Goal
 
-| User Input | Agent State | Result |
-|----------|-----------|--------|
-| "yeah", "ok", "hmm" | Agent speaking | **Ignored** (agent continues seamlessly) |
-| "stop", "wait", "no" | Agent speaking | **Interrupted immediately** |
-| "yeah", "ok" | Agent silent | **Processed as valid input** |
-| "yeah wait a second" | Agent speaking | **Interrupted (semantic command detected)** |
-| "hello", "start" | Agent silent | **Normal response** |
+The objective of this submission is to introduce an intelligent interruption layer such that:
 
----
-
-## 🧠 Solution Overview
-
-The core issue is that **VAD detects silence faster than STT produces text**.
-This causes the agent to stop speaking before the system can determine
-whether the user actually intended to interrupt.
-
-To solve this, I implemented a **state-aware filtering layer** that:
-
-1. Tracks the **agent speaking state**
-2. Tracks the **last finalized STT utterance**
-3. Filters interruption behavior **based on both state and semantics**
-
-### Key Design Principles
-
-- **No VAD kernel modification**  
-  VAD is treated as a signal, not a decision-maker.
-
-- **Text-validated interruption**  
-  The agent only interrupts once STT confirms a real command.
-
-- **Backchannel awareness**  
-  Passive acknowledgements are ignored *only when the agent is speaking*.
+- Passive filler acknowledgements are ignored *while the agent is actively speaking*
+- Explicit interruption commands instantly stop the agent
+- The same filler words are still accepted normally when the agent is silent
+- All improvements remain in the application logic layer (no changes to the VAD kernel)
 
 ---
 
-## 🧩 Key Implementation Details
+## Expected Agent Behavior
 
-### 1️⃣ Configurable Ignore List
+| User Utterance | Agent Status | Outcome |
+|--------------|-------------|--------|
+| "yeah", "ok", "hmm" | Agent speaking | Ignored, agent continues speaking |
+| "stop", "wait", "cancel" | Agent speaking | Agent is interrupted immediately |
+| "yeah", "ok" | Agent silent | Treated as a valid user response |
+| "yeah wait a second" | Agent speaking | Interruption triggered due to intent word |
+| "hello", "start" | Agent silent | Standard reply generation |
 
-A configurable list of passive acknowledgement words is used:
+---
+
+## Approach Summary
+
+The key issue comes from a timing mismatch:
+
+- VAD reacts instantly when the user produces sound  
+- STT transcription arrives slightly later
+
+Because of this, interruptions may occur before the system understands whether the user intended to stop the agent or was simply acknowledging.
+
+To address this, my solution introduces a **state-aware interruption filter** that:
+
+1. Tracks whether the agent is currently speaking  
+2. Captures the STT transcript content  
+3. Filters interruptions based on semantic intent  
+
+---
+
+## Design Principles
+
+- **No modification to VAD internals**  
+  VAD is treated only as a signal, not the final decision-maker.
+
+- **Transcript-confirmed interruption**  
+  Speech is interrupted only when the transcript indicates true intent.
+
+- **Backchannel suppression only during speech**  
+  Passive acknowledgements are ignored only if the agent is already talking.
+
+---
+
+## Setup Instructions
+
+### Requirements
+
+- Python 3.9+
+- `uv` package manager
+- LiveKit Cloud credentials (URL + API Keys)
+
+---
+
+### Installation
+
+Clone the repository:
+
+```bash
+git clone <your-repo-url>
+cd agents-assignment
+````
+
+Install dependencies:
+
+```bash
+uv sync --all-extras --dev
+```
+
+---
+
+### Environment Setup
+
+Create a `.env` file using `.env.example` and fill in your LiveKit credentials:
+
+```env
+LIVEKIT_URL=...
+LIVEKIT_API_KEY=...
+LIVEKIT_API_SECRET=...
+```
+
+---
+
+## Running the Agent
+
+To test the interruption logic in terminal mode:
+
+```bash
+uv run examples/voice_agents/basic_agent.py console
+```
+
+* Press `Space` to simulate voice input
+* Enter text manually to simulate STT transcripts
+
+---
+
+## Configuration
+
+The word categories for interruption handling are defined inside:
+
+`livekit/agents/voice/agent_activity.py`
+
+```python
+# Hard interruption commands (always stop the agent)
+INTERRUPT_KEYWORDS = "stop,wait,pause,hold,cancel,halt,abort,no"
+
+# Passive acknowledgement fillers (ignored only during speech)
+PASSIVE_FILLER_WORDS = "okay,ok,yeah,yes,yep,uh,um,hmm,hm,right,sure,gotcha"
+```
+
+To customize behavior:
+
+* Add acknowledgement words to `PASSIVE_FILLER_WORDS`
+* Add command words to `INTERRUPT_KEYWORDS`
+
+---
+
+## Implementation Highlight
+
+A dedicated ignore list is used for conversational backchannels:
 
 ```python
 IGNORE_WORDS = [
@@ -89,5 +169,22 @@ IGNORE_WORDS = [
     "uh-huh",
     "right"
 ]
+```
 
-Link to the demo video: https://drive.google.com/file/d/1PrefOubQecFKNXs6Qi45-oJTlHnhPsAI/view?usp=sharing
+These are filtered only when the agent is already speaking.
+
+---
+
+## Demonstration Video
+
+A working demo of all required scenarios is provided here:
+
+[https://drive.google.com/file/d/1PrefOubQecFKNXs6Qi45-oJTlHnhPsAI/view?usp=sharing](https://drive.google.com/file/d/1PrefOubQecFKNXs6Qi45-oJTlHnhPsAI/view?usp=sharing)
+
+---
+
+## Summary
+
+This project improves LiveKit interruption handling by preventing false cutoffs on passive listener cues while maintaining immediate responsiveness to genuine stop commands. The solution operates purely at the logic layer and meets the assignment constraints for real-time conversational robustness.
+
+
